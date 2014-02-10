@@ -7,36 +7,36 @@
 
       <span class="im_message_service" ng-switch="historyMessage.action['_']">
         <span ng-switch-when="messageActionChatCreate">
-          created the group &laquo;<strong>{{historyMessage.action.title}}</strong>&raquo;
+          создал беседу &laquo;<strong>{{historyMessage.action.title}}</strong>&raquo;
         </span>
         <span ng-switch-when="messageActionChatEditTitle">
-          changed group name to  &laquo;<strong>{{historyMessage.action.title}}</strong>&raquo;
+          изменил название беседы на  &laquo;<strong>{{historyMessage.action.title}}</strong>&raquo;
         </span>
         <span ng-switch-when="messageActionChatEditPhoto">
-          changed group photo
+          изменил фотографию беседы
         </span>
         <span ng-switch-when="messageActionChatDeletePhoto">
-          removed group photo
+          удалил фотографию беседы
         </span>
         <span ng-switch-when="messageActionChatAddUser">
           <span ng-if="historyMessage.from_id != historyMessage.action.user_id">
             invited <a ng-click="openUser(historyMessage.action.user_id)" ng-bind-html="historyMessage.action.user.rFullName"></a>
           </span>
           <span ng-if="historyMessage.from_id == historyMessage.action.user_id">
-            returned to group
+            вернулся в беседу
           </span>
         </span>
         <span ng-switch-when="messageActionChatDeleteUser">
           <span ng-if="historyMessage.from_id != historyMessage.action.user_id">
-            kicked <a ng-click="openUser(historyMessage.action.user_id)" ng-bind-html="historyMessage.action.user.rFullName"></a>
+            удалил <a ng-click="openUser(historyMessage.action.user_id)" ng-bind-html="historyMessage.action.user.rFullName"></a>
           </span>
           <span ng-if="historyMessage.from_id == historyMessage.action.user_id">
-            left group
+            покинул беседу
           </span>
         </span>
 
         <span ng-switch-default>
-          unsupported action {{historyMessage.action}}
+          неподдерживаемое действие {{historyMessage.action}}
         </span>
       </span>
 
@@ -78,7 +78,7 @@
 
 
       <div class="im_message_fwd_header" ng-if="historyMessage._ == 'messageForwarded'">
-        Forwarded message from <a class="im_message_fwd_author" ng-click="openUser(historyMessage.fwd_from_id)" ng-bind-html="historyMessage.fwdUser.rFirstName"></a>, <span class="im_message_fwd_date">{{historyMessage.fwd_date | dateOrTime}}</span>
+        Прикрепленное сообщение от <a class="im_message_fwd_author" ng-click="openUser(historyMessage.fwd_from_id)" ng-bind-html="historyMessage.fwdUser.rFirstName"></a>, <span class="im_message_fwd_date">{{historyMessage.fwd_date | dateOrTime}}</span>
       </div>
 
       <div class="im_message_media" ng-if="historyMessage.media &amp;&amp; historyMessage.media._ != 'messageMediaEmpty'" ng-switch="historyMessage.media._">
@@ -160,13 +160,13 @@
               </span>
             </div>
             <div class="im_message_audio_actions" ng-if="!historyMessage.media.audio.progress.enabled &amp;&amp; !historyMessage.media.audio.url">
-              <a href="" ng-click="openAudio(historyMessage.media.audio.id)">Play</a>
+              <a href="" ng-click="openAudio(historyMessage.media.audio.id)">Воспроизвести</a>
             </div>
             <div class="im_message_download_progress_wrap" ng-if="historyMessage.media.audio.progress.enabled">
               <div class="progress tg_down_progress">
                 <div class="progress-bar progress-bar-success" role="progressbar" aria-valuenow="{{historyMessage.media.audio.progress.percent}}" aria-valuemin="0" aria-valuemax="100" style="width: {{historyMessage.media.audio.progress.percent}}%">
                   <span class="sr-only">
-                    {{historyMessage.media.audio.progress.percent}}% Complete (success)
+                    {{historyMessage.media.audio.progress.percent}}% Завершено (выполнено)
                   </span>
                 </div>
               </div>
@@ -215,7 +215,7 @@
               <div class="progress tg_down_progress">
                 <div class="progress-bar progress-bar-success" role="progressbar" aria-valuenow="{{historyMessage.media.progress.percent}}" aria-valuemin="0" aria-valuemax="100" style="width: {{historyMessage.media.progress.percent}}%">
                   <span class="sr-only">
-                    {{historyMessage.media.progress.percent}}% Complete (success)
+                    {{historyMessage.media.progress.percent}}% Завершено (выполнено)
                   </span>
                 </div>
               </div>
