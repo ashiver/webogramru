@@ -32,13 +32,13 @@ angular.module('myApp.filters', [])
   .filter('userStatus', ['$filter', function($filter) {
     return function (user) {
       if (!user || !user.status || user.status._ == 'userStatusEmpty') {
-        return 'оффлайн';
+        return 'offline';
       }
       if (user.status._ == 'userStatusOnline') {
-        return 'онлайн';
+        return 'online';
       }
 
-      return 'был в сети ' + $filter('relativeTime')(user.status.was_online);
+      return 'last seen ' + $filter('relativeTime')(user.status.was_online);
     }
   }])
 
@@ -121,9 +121,9 @@ angular.module('myApp.filters', [])
           totalParts = total.split(' ');
 
       if (totalParts[1] === doneParts[1]) {
-        return doneParts[0] + ' из ' + totalParts[0] + ' ' + (doneParts[1] || '');
+        return doneParts[0] + ' of ' + totalParts[0] + ' ' + (doneParts[1] || '');
       }
-      return done + ' из ' + total;
+      return done + ' of ' + total;
     }
   }])
 
@@ -145,13 +145,13 @@ angular.module('myApp.filters', [])
           diff = Math.abs(tsNow() - ticks);
 
       if (diff < 60000) {
-        return 'только что';
+        return 'just now';
       }
       if (diff < 3000000) {
-        return Math.ceil(diff / 60000) + ' минут назад';
+        return Math.ceil(diff / 60000) + ' minutes ago';
       }
       if (diff < 10000000) {
-        return Math.ceil(diff / 3600000) + ' часов назад';
+        return Math.ceil(diff / 3600000) + ' hours ago';
       }
       return $filter('dateOrTime')(timestamp);
     }

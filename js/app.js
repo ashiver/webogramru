@@ -18,6 +18,12 @@ if (!window._osX) {
 }
 $('body').addClass(window._retina ? 'is_2x' : 'is_1x');
 
+$(window).on('load', function () {
+  setTimeout(function () {
+    window.scrollTo(0,1);
+  }, 0);
+});
+
 // Declare app level module which depends on filters, and services
 angular.module('myApp', [
   'ngRoute',
@@ -55,9 +61,9 @@ config(['$locationProvider', '$routeProvider', '$compileProvider', function($loc
 
 
   // $locationProvider.html5Mode(true);
-  $routeProvider.when('/', {templateUrl: 'partials/welcome.html?3', controller: 'AppWelcomeController'});
-  $routeProvider.when('/login', {templateUrl: 'partials/login.html?4', controller: 'AppLoginController'});
-  $routeProvider.when('/im', {templateUrl: 'partials/im.html?12', controller: 'AppIMController', reloadOnSearch: false});
+  $routeProvider.when('/', {templateUrl: 'partials/welcome.html?4', controller: 'AppWelcomeController'});
+  $routeProvider.when('/login', {templateUrl: 'partials/login.html?5', controller: 'AppLoginController'});
+  $routeProvider.when('/im', {templateUrl: 'partials/im.html?13', controller: 'AppIMController', reloadOnSearch: false});
   $routeProvider.otherwise({redirectTo: '/'});
 
 }]);

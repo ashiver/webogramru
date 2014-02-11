@@ -1485,7 +1485,7 @@ angular.module('myApp.services', [])
 
   function wrapForFull (photoID) {
     var photo = wrapForHistory(photoID),
-        fullWidth = 542,
+        fullWidth = Math.min($(window).width() - 60, 542),
         fullHeight = $($window).height() - 150,
         fullPhotoSize = choosePhotoSize(photo, fullWidth, fullHeight),
         full = {
@@ -1583,7 +1583,7 @@ angular.module('myApp.services', [])
 
   function wrapForFull (videoID) {
     var video = wrapForHistory(videoID),
-        fullWidth = 542,
+        fullWidth = Math.min($(window).width() - 60, 542),
         fullHeight = $($window).height() - 150,
         fullPhotoSize = video,
         full = {
@@ -2393,6 +2393,9 @@ angular.module('myApp.services', [])
 
       notification.onclick = function () {
         notification.close();
+        if (window.chrome && chrome.app && chrome.app.window) {
+          chrome.app.window.current().focus();
+        }
         window.focus();
         notificationsClear();
         if (data.onclick) {
