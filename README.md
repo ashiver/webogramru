@@ -1,4 +1,4 @@
-WebogramRu ([http://tgm.vkhead.ru|tgm.vkhead.ru])
+WebogramRu (http://tgm.vkhead.ru)
 ==========
 
 Русскоязычный веб-клиент Telegram
