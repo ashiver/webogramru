@@ -89,18 +89,23 @@ angular.module('myApp.directives', ['myApp.filters'])
           return;
         }
 
-        $(element).css({
-          height: $($window).height() - footer.offsetHeight - (headWrap ? headWrap.offsetHeight : 50) - 72
-        });
-        updateScroller();
-        if (!headWrap) {
+        if (!headWrap || !headWrap.offsetHeight) {
           headWrap = $('.tg_page_head')[0];
         }
+        if (!footer || !footer.offsetHeight) {
+          footer = $('.im_page_footer')[0];
+        }
+        $(element).css({
+          height: $($window).height() - footer.offsetHeight - (headWrap ? headWrap.offsetHeight : 44) - 72
+        });
+
+        updateScroller();
       }
 
       $($window).on('resize', updateSizes);
 
       updateSizes();
+      setTimeout(updateSizes, 1000);
     };
 
   })
@@ -110,7 +115,6 @@ angular.module('myApp.directives', ['myApp.filters'])
     return {
       link: link
     };
-
 
     function link (scope, element, attrs) {
       var searchWrap = $('.contacts_modal_search')[0],
@@ -149,7 +153,7 @@ angular.module('myApp.directives', ['myApp.filters'])
           scrollableWrap = $('.im_history_scrollable_wrap', element)[0],
           scrollable = $('.im_history_scrollable', element)[0],
           panelWrap = $('.im_history_panel_wrap', element)[0],
-          sendPanelWrap = $('.im_send_panel_wrap', element)[0],
+          bottomPanelWrap = $('.im_bottom_panel_wrap', element)[0],
           sendFormWrap = $('.im_send_form_wrap', element)[0],
           headWrap = $('.tg_page_head')[0],
           footer = $('.im_page_footer')[0],
@@ -211,8 +215,16 @@ angular.module('myApp.directives', ['myApp.filters'])
         onContentLoaded(function () {
           $(scrollableWrap).removeClass('im_history_to_bottom');
           $(scrollable).css({bottom: ''});
-          updateSizes();
-          scrollableWrap.scrollTop = scrollableWrap.scrollHeight;
+          updateSizes(true);
+
+          var unreadSplit = $('.im_message_unread_split', scrollableWrap);
+          if (unreadSplit[0]) {
+            scrollableWrap.scrollTop = unreadSplit[0].offsetTop;
+            atBottom = false;
+          } else {
+            scrollableWrap.scrollTop = scrollableWrap.scrollHeight;
+          }
+
           updateScroller();
           moreNotified = false;
         });
@@ -245,21 +257,9 @@ angular.module('myApp.directives', ['myApp.filters'])
       });
 
       scope.$on('ui_panel_update', function () {
-        var h = $(historyWrap).height();
-        $(panelWrap).addClass('im_panel_to_top');
         onContentLoaded(function () {
-          $(panelWrap).removeClass('im_panel_to_top');
-          updateSizes(true);
-
-          var newH = $(historyWrap).height();
-
-          if (atBottom) {
-            scrollableWrap.scrollTop = scrollableWrap.scrollHeight;
-            updateScroller();
-          } else {
-            scrollableWrap.scrollTop -= newH - h;
-            updateScroller();
-          }
+          updateSizes();
+          scope.$broadcast('ui_message_send');
         });
       });
 
@@ -282,11 +282,19 @@ angular.module('myApp.directives', ['myApp.filters'])
       });
 
       function updateSizes (heightOnly) {
-        $(sendFormWrap).css({
-          height: $(sendForm).height()
-        });
+        if ($(sendFormWrap).is(':visible')) {
+          $(sendFormWrap).css({
+            height: $(sendForm).height()
+          });
+        }
 
-        var historyH = $($window).height() - panelWrap.offsetHeight - sendPanelWrap.offsetHeight - headWrap.offsetHeight - footer.offsetHeight;
+        if (!headWrap || !headWrap.offsetHeight) {
+          headWrap = $('.tg_page_head')[0];
+        }
+        if (!footer || !footer.offsetHeight) {
+          footer = $('.im_page_footer')[0];
+        }
+        var historyH = $($window).height() - panelWrap.offsetHeight - bottomPanelWrap.offsetHeight - (headWrap ? headWrap.offsetHeight : 44) - footer.offsetHeight;
         $(historyWrap).css({
           height: historyH
         });
@@ -306,6 +314,7 @@ angular.module('myApp.directives', ['myApp.filters'])
 
       $($window).on('resize', updateSizes);
 
+      updateSizes();
       onContentLoaded(updateSizes);
     }
 
@@ -428,6 +437,10 @@ angular.module('myApp.directives', ['myApp.filters'])
       };
 
       $('body').on('dragenter dragleave dragover drop', onDragDropEvent);
+      $(document).on('paste', onPasteEvent);
+      if (richTextarea) {
+        $(richTextarea).on('DOMNodeInserted', onPastedImageEvent);
+      }
 
       scope.$on('ui_peer_change', focusField);
       scope.$on('ui_history_focus', focusField);
@@ -439,6 +452,10 @@ angular.module('myApp.directives', ['myApp.filters'])
 
       scope.$on('$destroy', function cleanup() {
         $('body').off('dragenter dragleave dragover drop', onDragDropEvent);
+        $(document).off('paste', onPasteEvent);
+        if (richTextarea) {
+          $(richTextarea).off('DOMNodeInserted', onPastedImageEvent);
+        }
       });
 
       focusField();
@@ -447,6 +464,51 @@ angular.module('myApp.directives', ['myApp.filters'])
         onContentLoaded(function () {
           editorElement.focus();
         });
+      }
+
+      function onPastedImageEvent (e) {
+        var element = e && e.target;
+        var src;
+        if (element && (src = element.src) && src.indexOf('data') === 0) {
+          element.parentNode.removeChild(element);
+          src = src.substr(5).split(';');
+          var contentType = src[0];
+          var base64 = atob(src[1].split(',')[1]);
+          var array = new Uint8Array(base64.length);
+
+          for (var i = 0; i < base64.length; i++) {
+            array[i] = base64.charCodeAt(i);
+          }
+
+          var blob = new Blob([array], {type: contentType});
+
+          if (safeConfirm('Are you sure to send file(s) from clipboard?')) {
+            scope.$apply(function () {
+              scope.draftMessage.files = [blob];
+              scope.draftMessage.isMedia = true;
+            });
+          }
+        }
+      };
+
+      function onPasteEvent (e) {
+        var cData = (e.originalEvent || e).clipboardData,
+            items = cData && cData.items || [],
+            files = [],
+            i;
+
+        for (i = 0; i < items.length; i++) {
+          if (items[i].kind == 'file') {
+            files.push(items[i].getAsFile());
+          }
+        }
+
+        if (files.length && safeConfirm('Are you sure to send file(s) from clipboard?')) {
+          scope.$apply(function () {
+            scope.draftMessage.files = files;
+            scope.draftMessage.isMedia = true;
+          });
+        }
       }
 
       function onDragDropEvent(e) {
@@ -502,14 +564,21 @@ angular.module('myApp.directives', ['myApp.filters'])
     function link (scope, element, attrs) {
       var counter = 0;
 
-      var cachedSrc = MtpApiFileManager.getCachedFile(scope.thumb && scope.thumb.location);
+      var cachedSrc = MtpApiFileManager.getCachedFile(
+        scope.thumb &&
+        scope.thumb.location &&
+        !scope.thumb.location.empty &&
+        scope.thumb.location
+      );
+
       if (cachedSrc) {
         element.attr('src', cachedSrc);
       }
 
-      scope.$watch('thumb.location', function (newLocation) {
+      scope.$watchCollection('thumb.location', function (newLocation) {
+        // console.log('new loc', newLocation, arguments);
         var counterSaved = ++counter;
-        if (!newLocation) {
+        if (!newLocation || newLocation.empty) {
           element.attr('src', scope.thumb && scope.thumb.placeholder || 'img/blank.gif');
           return;
         }
@@ -650,7 +719,7 @@ angular.module('myApp.directives', ['myApp.filters'])
             />\
           </div>\
           <div class="video_full_player" ng-if="player.src">\
-            <embed ng-src="{{player.src}}" width="{{video.full.width}}" height="{{video.full.height}}" autoplay="true" CONTROLLER="TRUE" loop="false" pluginspace="http://www.apple.com/quicktime/" ng-if="player.quicktime"/>\
+            <embed ng-src="{{player.src}}" width="{{video.full.width}}" height="{{video.full.height}}" autoplay="true" CONTROLLER="TRUE" SHOWCONTROLS="TRUE" controller="true" loop="false" pluginspace="http://www.apple.com/quicktime/" ng-if="player.quicktime"/>\
             <video width="{{video.full.width}}" height="{{video.full.height}}" controls autoplay  ng-if="!player.quicktime">\
               <source ng-src="{{player.src}}" type="video/mp4">\
             </video>\
@@ -677,18 +746,19 @@ angular.module('myApp.directives', ['myApp.filters'])
       };
 
       var hasQt = false, i;
-      // if (navigator.plugins) {
-      //   for (i = 0; i < navigator.plugins.length; i++) {
-      //     if (navigator.plugins[i].name.indexOf('QuickTime') >= 0) {
-      //       hasQt = true;
-      //     }
-      //   }
-      // }
+      if (navigator.plugins) {
+        for (i = 0; i < navigator.plugins.length; i++) {
+          if (navigator.plugins[i].name.indexOf('QuickTime') >= 0) {
+            hasQt = true;
+          }
+        }
+      }
 
       MtpApiFileManager.downloadFile(scope.video.dc_id, inputLocation, scope.video.size, null, {mime: 'video/mp4'}).then(function (url) {
         scope.progress.enabled = false;
         // scope.progress = {enabled: true, percent: 50};
-        scope.player.quicktime = hasQt;
+        scope.player.hasQuicktime = hasQt;
+        scope.player.quicktime = false;
         scope.player.src = $sce.trustAsResourceUrl(url);
       }, function (e) {
         console.log('Download video failed', e, scope.video);

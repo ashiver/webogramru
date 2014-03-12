@@ -14,7 +14,8 @@ angular.module('myApp.services', [])
 .service('AppConfigManager', function ($q) {
   var testPrefix = window._testMode ? 't_' : '';
   var cache = {};
-  var useLs = !window.chrome || !chrome.storage || !chrome.storage.local;
+  var useCs = !!(window.chrome && chrome.storage && chrome.storage.local);
+  var useLs = !useCs && !!window.localStorage;
 
   function getValue() {
     var keys = Array.prototype.slice.call(arguments),
@@ -34,6 +35,9 @@ angular.module('myApp.services', [])
         var value = localStorage.getItem(key);
         value = (value === undefined || value === null) ? false : JSON.parse(value);
         result.push(cache[key] = value);
+      }
+      else if (!useCs) {
+        result.push(cache[key] = false);
       }
       else {
         allFound = false;
@@ -74,6 +78,10 @@ angular.module('myApp.services', [])
       return $q.when();
     }
 
+    if (!useCs) {
+      return $q.when();
+    }
+
     var deferred = $q.defer();
 
     chrome.storage.local.set(keyValues, function () {
@@ -102,6 +110,10 @@ angular.module('myApp.services', [])
       return $q.when();
     }
 
+    if (!useCs) {
+      return $q.when();
+    }
+
     var deferred = $q.defer();
 
     chrome.storage.local.remove(keys, function () {
@@ -120,7 +132,9 @@ angular.module('myApp.services', [])
 
 .service('AppUsersManager', function ($rootScope, $modal, $modalStack, $filter, MtpApiFileManager, MtpApiManager, RichTextProcessor, SearchIndexManager) {
   var users = {},
+      cachedPhotoLocations = {},
       contactsFillPromise,
+      contactsList,
       contactsIndex = SearchIndexManager.createIndex();
 
   function fillContacts () {
@@ -130,8 +144,8 @@ angular.module('myApp.services', [])
     return contactsFillPromise = MtpApiManager.invokeApi('contacts.getContacts', {
       hash: ''
     }).then(function (result) {
-      var contactsList = [],
-          userID, searchText, i;
+      var userID, searchText, i;
+      contactsList = [];
       saveApiUsers(result.users);
 
       for (var i = 0; i < result.contacts.length; i++) {
@@ -191,14 +205,18 @@ angular.module('myApp.services', [])
       apiUser.rFirstName = RichTextProcessor.wrapRichText(apiUser.last_name, {noLinks: true, noLinebreaks: true}) || apiUser.rPhone || 'DELETED';
       apiUser.rFullName = RichTextProcessor.wrapRichText(apiUser.last_name, {noLinks: true, noLinebreaks: true}) || apiUser.rPhone || 'DELETED';
     }
-    apiUser.sortName = $.trim((apiUser.last_name || '') + ' ' + apiUser.first_name);
+    apiUser.sortName = SearchIndexManager.cleanSearchText(apiUser.first_name + ' ' + (apiUser.last_name || ''));
     apiUser.sortStatus = apiUser.status && (apiUser.status.expires || apiUser.status.was_online) || 0;
 
 
     if (users[apiUser.id] === undefined) {
       users[apiUser.id] = apiUser;
     } else {
-      angular.extend(users[apiUser.id], apiUser);
+      safeReplaceObject(users[apiUser.id], apiUser);
+    }
+
+    if (cachedPhotoLocations[apiUser.id] !== undefined) {
+      safeReplaceObject(cachedPhotoLocations[apiUser.id], apiUser && apiUser.photo && apiUser.photo.photo_small || {empty: true});
     }
   };
 
@@ -222,9 +240,16 @@ angular.module('myApp.services', [])
       }
     };
 
+    if (cachedPhotoLocations[id] === undefined) {
+      cachedPhotoLocations[id] = user && user.photo && user.photo.photo_small || {empty: true};
+    }
+
+    var num = (Math.abs(id) % 8) + 1;
+
     return {
-      placeholder: 'img/placeholders/' + placeholder + 'Avatar'+((Math.abs(id) % 8) + 1)+'@2x.png',
-      location: user && user.photo && user.photo.photo_small
+      num: num,
+      placeholder: 'img/placeholders/' + placeholder + 'Avatar' + num + '@2x.png',
+      location: cachedPhotoLocations[id]
     };
   }
 
@@ -268,15 +293,7 @@ angular.module('myApp.services', [])
       templateUrl: 'partials/user_modal.html?2',
       controller: 'UserModalController',
       scope: scope,
-      windowClass: 'user_modal_window',
-      resolve: {
-        userFull: MtpApiManager.invokeApi('users.getFullUser', {
-          id: getUserInput(userID)
-        }).then(function (result) {
-          saveApiUser(result.user);
-          return result;
-        })
-      }
+      windowClass: 'user_modal_window'
     });
   }
 
@@ -298,8 +315,31 @@ angular.module('myApp.services', [])
       case 'updateUserPhoto':
         var userID = update.user_id;
         if (users[userID]) {
-          users[userID].photo = update.photo;
+          safeReplaceObject(users[userID].photo, update.photo);
+
+          if (cachedPhotoLocations[userID] !== undefined) {
+            safeReplaceObject(cachedPhotoLocations[userID], update.photo && update.photo.photo_small || {empty: true});
+          }
+
           $rootScope.$broadcast('user_update', userID);
+        }
+        break;
+
+      case 'updateContactLink':
+        if (angular.isArray(contactsList)) {
+          var userID = update.user_id,
+              curPos = curIsContact = contactsList.indexOf(userID),
+              curIsContact = curPos != -1,
+              newIsContact = update.my_link._ == 'contacts.myLinkContact';
+
+          if (newIsContact != curIsContact) {
+            if (newIsContact) {
+              contactsList.push(userID);
+              SearchIndexManager.indexObject(userID, getUserSearchText(userID), contactsIndex);
+            } else {
+              contactsList.splice(curPos, 1);
+            }
+          }
         }
         break;
     }
@@ -321,7 +361,8 @@ angular.module('myApp.services', [])
 })
 
 .service('AppChatsManager', function ($rootScope, $modal, MtpApiFileManager, MtpApiManager, AppUsersManager, RichTextProcessor) {
-  var chats = {};
+  var chats = {},
+      cachedPhotoLocations = {};
 
   function saveApiChats (apiChats) {
     angular.forEach(apiChats, saveApiChat);
@@ -335,7 +376,11 @@ angular.module('myApp.services', [])
     if (chats[apiChat.id] === undefined) {
       chats[apiChat.id] = apiChat;
     } else {
-      angular.extend(chats[apiChat.id], apiChat);
+      safeReplaceObject(chats[apiChat.id], apiChat);
+    }
+
+    if (cachedPhotoLocations[apiChat.id] !== undefined) {
+      safeReplaceObject(cachedPhotoLocations[apiChat.id], apiChat && apiChat.photo && apiChat.photo.photo_small || {empty: true});
     }
   };
 
@@ -350,9 +395,13 @@ angular.module('myApp.services', [])
   function getChatPhoto(id, placeholder) {
     var chat = getChat(id);
 
+    if (cachedPhotoLocations[id] === undefined) {
+      cachedPhotoLocations[id] = chat && chat.photo && chat.photo.photo_small || {empty: true};
+    }
+
     return {
       placeholder: 'img/placeholders/' + placeholder + 'Avatar'+((Math.abs(id) % 4) + 1)+'@2x.png',
-      location: chat && chat.photo && chat.photo.photo_small
+      location: cachedPhotoLocations[id]
     };
   }
 
@@ -482,11 +531,21 @@ angular.module('myApp.services', [])
 
 .service('SearchIndexManager', function () {
   var badCharsRe = /[`~!@#$%^&*()\-_=+\[\]\\|{}'";:\/?.>,<\s]+/g,
-      trimRe = /^\s+|\s$/g;
+      trimRe = /^\s+|\s$/g,
+      accentsReplace = {
+        a: /[áâäà]/g,
+        e: /[éêëè]/g,
+        i: /[íîïì]/g,
+        o: /[óôöò]/g,
+        u: /[úûüù]/g,
+        c: /ç/g,
+        ss: /ß/g
+      }
 
   return {
     createIndex: createIndex,
     indexObject: indexObject,
+    cleanSearchText: cleanSearchText,
     search: search
   };
 
@@ -497,12 +556,24 @@ angular.module('myApp.services', [])
     }
   }
 
+  function cleanSearchText (text) {
+    text = text.replace(badCharsRe, ' ').replace(trimRe, '').toLowerCase();
+
+    for (var key in accentsReplace) {
+      if (accentsReplace.hasOwnProperty(key)) {
+        text = text.replace(accentsReplace[key], key);
+      }
+    }
+
+    return text;
+  }
+
   function indexObject (id, searchText, searchIndex) {
     if (searchIndex.fullTexts[id] !== undefined) {
       return false;
     }
 
-    searchText = searchText.replace(badCharsRe, ' ').replace(trimRe, '').toLowerCase();
+    searchText = cleanSearchText(searchText);
 
     if (!searchText.length) {
       return false;
@@ -531,7 +602,7 @@ angular.module('myApp.services', [])
     var shortIndexes = searchIndex.shortIndexes,
         fullTexts = searchIndex.fullTexts;
 
-    query = query.replace(badCharsRe, ' ').replace(trimRe, '').toLowerCase();
+    query = cleanSearchText(query);
 
     var queryWords = query.split(' '),
         foundObjs = false,
@@ -677,6 +748,46 @@ angular.module('myApp.services', [])
     return deferred.promise;
   }
 
+  function fillHistoryStorage (inputPeer, maxID, fullLimit, historyStorage) {
+    return MtpApiManager.invokeApi('messages.getHistory', {
+      peer: inputPeer,
+      offset: 0,
+      limit: fullLimit,
+      max_id: maxID || 0
+    }).then(function (historyResult) {
+      AppUsersManager.saveApiUsers(historyResult.users);
+      AppChatsManager.saveApiChats(historyResult.chats);
+      saveMessages(historyResult.messages);
+
+      historyStorage.count = historyResult._ == 'messages.messagesSlice'
+        ? historyResult.count
+        : historyResult.messages.length;
+
+      var offset = 0;
+      if (maxID > 0) {
+        for (offset = 0; offset < historyStorage.history.length; offset++) {
+          if (maxID > historyStorage.history[offset]) {
+            break;
+          }
+        }
+      }
+
+      historyStorage.history.splice(offset, historyStorage.history.length - offset);
+      angular.forEach(historyResult.messages, function (message) {
+        historyStorage.history.push(message.id);
+      });
+
+      fullLimit -= historyResult.messages.length;
+
+      if (fullLimit > 0 && historyStorage.history.length < historyStorage.count) {
+        maxID = historyStorage.history[historyStorage.history.length - 1];
+        return fillHistoryStorage(inputPeer, maxID, fullLimit, historyStorage);
+      }
+
+      return true;
+    });
+  };
+
   function getHistory (inputPeer, maxID, limit) {
 
     var peerID = AppPeersManager.getPeerID(inputPeer),
@@ -691,6 +802,17 @@ angular.module('myApp.services', [])
       resultPending = historyStorage.pending.slice();
     }
 
+    var unreadLimit = false;
+    if (!limit && !maxID) {
+      var foundDialog = getDialogByPeerID(peerID);
+      if (foundDialog && foundDialog[0] && foundDialog[0].unread_count > 1) {
+        unreadLimit = foundDialog[0].unread_count;
+        limit = Math.max(20, unreadLimit + 2);
+      }
+    }
+    if (!limit) {
+      limit = 20;
+    }
 
     if (maxID > 0) {
       for (offset = 0; offset < historyStorage.history.length; offset++) {
@@ -699,7 +821,6 @@ angular.module('myApp.services', [])
         }
       }
     }
-    // console.log('history storage', angular.copy(historyStorage.history), maxID, offset);
 
     if (historyStorage.count !== null && (
       historyStorage.history.length >= offset + limit ||
@@ -707,26 +828,12 @@ angular.module('myApp.services', [])
     )) {
       return $q.when({
         count: historyStorage.count,
-        history: resultPending.concat(historyStorage.history.slice(offset, offset + limit))
+        history: resultPending.concat(historyStorage.history.slice(offset, offset + limit)),
+        unreadLimit: unreadLimit
       });
     }
 
-    var deferred = $q.defer();
-
-    MtpApiManager.invokeApi('messages.getHistory', {
-      peer: inputPeer,
-      offset: offset,
-      limit: limit,
-      max_id: maxID || 0
-    }).then(function (historyResult) {
-      AppUsersManager.saveApiUsers(historyResult.users);
-      AppChatsManager.saveApiChats(historyResult.chats);
-      saveMessages(historyResult.messages);
-
-      historyStorage.count = historyResult._ == 'messages.messagesSlice'
-        ? historyResult.count
-        : historyResult.messages.length;
-
+    return fillHistoryStorage(inputPeer, maxID, limit, historyStorage).then(function () {
       offset = 0;
       if (maxID > 0) {
         for (offset = 0; offset < historyStorage.history.length; offset++) {
@@ -736,23 +843,12 @@ angular.module('myApp.services', [])
         }
       }
 
-      // console.log('history storage after', angular.copy(historyStorage.history), historyResult.messages, maxID, offset);
-
-      historyStorage.history.splice(offset, historyStorage.history.length - offset);
-      angular.forEach(historyResult.messages, function (message) {
-        historyStorage.history.push(message.id);
-      });
-      // console.log('history storage final', angular.copy(historyStorage.history), historyResult.messages, maxID, offset);
-
-      deferred.resolve({
+      return {
         count: historyStorage.count,
-        history: resultPending.concat(historyStorage.history.slice(offset, offset + limit))
-      });
-    }, function (error) {
-      deferred.reject(error);
+        history: resultPending.concat(historyStorage.history.slice(offset, offset + limit)),
+        unreadLimit: unreadLimit
+      };
     });
-
-    return deferred.promise;
   }
 
   function getSearch (inputPeer, query, inputFilter, maxID, limit) {
@@ -1020,18 +1116,27 @@ angular.module('myApp.services', [])
         randomIDS = bigint(randomID[0]).shiftLeft(32).add(bigint(randomID[1])).toString(),
         historyStorage = historiesStorage[peerID],
         inputPeer = AppPeersManager.getInputPeerByID(peerID),
-        attachType;
+        attachType, fileName, fileName;
 
     if (!options.isMedia) {
-      attachType = 'doc';
+      attachType = 'document';
+      fileName = 'document.' + file.type.split('/')[1];
     } else if (['image/jpeg', 'image/gif', 'image/png', 'image/bmp'].indexOf(file.type) >= 0) {
       attachType = 'photo';
+      fileName = 'photo.' + file.type.split('/')[1];
     } else if (file.type.substr(0, 6) == 'video/') {
       attachType = 'video';
+      fileName = 'video.mp4';
     } else if (file.type == 'audio/mpeg' || file.type == 'audio/mp3') {
       attachType = 'audio';
+      fileName = 'audio.mp3';
     } else {
-      attachType = 'doc';
+      attachType = 'document';
+      fileName = 'document.' + file.type.split('/')[1];
+    }
+
+    if (!file.name) {
+      file.name = fileName;
     }
 
     if (historyStorage === undefined) {
@@ -1061,6 +1166,21 @@ angular.module('myApp.services', [])
         pending: true
       };
 
+      var toggleError = function (on) {
+        var historyMessage = messagesForHistory[messageID];
+        if (on) {
+          message.error = true;
+          if (historyMessage) {
+            historyMessage.error = true;
+          }
+        } else {
+          delete message.error;
+          if (historyMessage) {
+            delete historyMessage.error;
+          }
+        }
+      }
+
       message.send = function () {
         MtpApiFileManager.uploadFile(file).then(function (inputFile) {
           var inputMedia;
@@ -1077,7 +1197,7 @@ angular.module('myApp.services', [])
               inputMedia = {_: 'inputMediaUploadedAudio', file: inputFile, duration: 0};
               break;
 
-            case 'doc':
+            case 'document':
             default:
               inputMedia = {_: 'inputMediaUploadedDocument', file: inputFile, file_name: file.name, mime_type: file.type};
           }
@@ -1815,7 +1935,7 @@ angular.module('myApp.services', [])
         height = 100,
         thumbPhotoSize = doc.thumb,
         thumb = {
-          placeholder: 'img/placeholders/DocThumbConversation.jpg',
+          // placeholder: 'img/placeholders/DocThumbConversation.jpg',
           width: width,
           height: height
         };
@@ -1832,13 +1952,15 @@ angular.module('myApp.services', [])
     } else {
       thumb = false;
     }
-
     doc.thumb = thumb;
+
+    doc.canDownload = !(window.chrome && chrome.fileSystem && chrome.fileSystem.chooseEntry);
+    doc.withPreview = doc.canDownload && doc.mime_type.match(/^(image\/|application\/pdf)/);
 
     return docsForHistory[docID] = doc;
   }
 
-  function openDoc (docID, accessHash) {
+  function openDoc (docID, accessHash, popup) {
     var doc = docs[docID],
         historyDoc = docsForHistory[docID] || doc || {},
         inputFileLocation = {
@@ -1879,6 +2001,11 @@ angular.module('myApp.services', [])
     } else {
       MtpApiFileManager.downloadFile(doc.dc_id, inputFileLocation, doc.size, null, {mime: doc.mime_type}).then(function (url) {
         delete historyDoc.progress;
+
+        if (popup) {
+          window.open(url, '_blank');
+          return
+        }
 
         var a = $('<a>Download</a>').css({position: 'absolute', top: 1, left: 1}).attr('href', url).attr('target', '_blank').attr('download', doc.file_name).appendTo('body');
         a[0].dataset.downloadurl = ['png', doc.file_name, url].join(':');
@@ -2202,6 +2329,7 @@ angular.module('myApp.services', [])
   var emojiUtf = [],
       emojiMap = {},
       emojiData = Config.Emoji,
+      emojiIconSize = 18,
       emojiCode;
 
   for (emojiCode in emojiData) {
@@ -2223,8 +2351,21 @@ angular.module('myApp.services', [])
       }).
       replace(/</g, '&lt;').
       replace(/>/g, '&gt;');
-  };
+  }
 
+  function getEmojiSpritesheetCoords(emojiCode) {
+    var i, row, column, totalColumns;
+    for (var cat = 0; cat < Config.EmojiCategories.length; cat++) {
+      totalColumns = Config.EmojiCategorySpritesheetDimens[cat][1];
+      i = Config.EmojiCategories[cat].indexOf(emojiCode);
+      if (i > -1) {
+        row = Math.floor(i / totalColumns);
+        column = (i % totalColumns);
+        return { category: cat, row: row, column: column };
+      }
+    }
+    return null;
+  }
 
   function wrapRichText(text, options) {
     if (!text || !text.length) {
@@ -2239,9 +2380,9 @@ angular.module('myApp.services', [])
         raw = text,
         html = [],
         url,
+        emojiFound = false,
         emojiTitle,
-        emojiFound = false;
-
+        emojiCoords;
 
     while ((match = raw.match(regExp))) {
       // console.log(2, match);
@@ -2282,14 +2423,17 @@ angular.module('myApp.services', [])
         if (emojiCode = emojiMap[match[6]]) {
           emojiFound = true;
           emojiTitle = encodeEntities(emojiData[emojiCode][1][0]);
+          emojiCoords = getEmojiSpritesheetCoords(emojiCode);
           html.push(
-            '<span class="emoji emoji-file-',
-            encodeEntities(emojiCode),
-            '" title="',
-            emojiTitle,
-            '">:',
-            emojiTitle,
-            ':</span>'
+            '<span class="emoji emoji-',
+            emojiCoords.category,
+            '-',
+            (emojiIconSize * emojiCoords.column),
+            '-',
+            (emojiIconSize * emojiCoords.row),
+            '" ',
+            'title="',emojiTitle, '">',
+            ':', emojiTitle, ':</span>'
           );
         } else {
           html.push(encodeEntities(match[6]));
@@ -2305,8 +2449,8 @@ angular.module('myApp.services', [])
     // console.log(3, text, html);
 
     if (emojiFound) {
-      text = text.replace(/<span class="emoji emoji-file-([0-9a-f]+?)"(.+?)<\/span>/g,
-                          '<span class="emoji" style="background-image: url(\'vendor/gemoji/images/$1.png\')"$2</span>');
+      text = text.replace(/<span class="emoji emoji-(\d)-(\d+)-(\d+)"(.+?)<\/span>/g,
+                          '<span class="emoji emoji-spritesheet-$1" style="background-position: -$2px -$3px;" $4</span>');
     }
 
     // console.log(4, text, html);

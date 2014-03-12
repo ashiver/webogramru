@@ -378,9 +378,8 @@ TLSerialization.prototype.checkLength = function (needBytes) {
     return;
   }
 
-  console.log('Increase buffer', this.offset, needBytes, this.maxLength);
-  console.trace();
-  this.maxLength = Math.max(this.maxLength * 2, this.offset + needBytes + 16);
+  console.trace('Increase buffer', this.offset, needBytes, this.maxLength);
+  this.maxLength = Math.ceil(Math.max(this.maxLength * 2, this.offset + needBytes + 16) / 4) * 4;
   var previousBuffer = this.buffer,
       previousArray = new Int32Array(previousBuffer);
 
@@ -1504,10 +1503,8 @@ factory('MtpNetworkerFactory', function (MtpDcConfigurator, MtpMessageIdGenerato
 
   var updatesProcessor,
       iii = 0,
-      offline;
-
-  $rootScope.offline = true;
-  $rootScope.offlineConnecting = true;
+      offline,
+      offlineInited = false;
 
   $rootScope.retryOnline = function () {
     $(document.body).trigger('online');
@@ -1544,6 +1541,12 @@ factory('MtpNetworkerFactory', function (MtpDcConfigurator, MtpMessageIdGenerato
 
     this.longPollInt = $interval(this.checkLongPoll.bind(this), 10000);
     this.checkLongPoll();
+
+    if (!offlineInited) {
+      offlineInited = true;
+      $rootScope.offline = true;
+      $rootScope.offlineConnecting = true;
+    }
   };
 
   MtpNetworker.prototype.updateSession = function () {
@@ -1797,7 +1800,7 @@ factory('MtpNetworkerFactory', function (MtpDcConfigurator, MtpMessageIdGenerato
   };
 
   MtpNetworker.prototype.toggleOffline = function(enabled) {
-    console.log('toggle ', enabled, this.dcID, this.iii);
+    // console.log('toggle ', enabled, this.dcID, this.iii);
     if (this.offline !== undefined && this.offline == enabled) {
       return false;
     }
@@ -2335,6 +2338,12 @@ factory('MtpApiManager', function (AppConfigManager, MtpAuthorizer, MtpNetworker
       AppConfigManager.remove('dc', 'user_auth');
 
       baseDcID = false;
+    }, function (error) {
+      AppConfigManager.remove('dc', 'user_auth');
+      if (error && error.code != 401) {
+        AppConfigManager.remove('dc' + baseDcID + '_auth_key');
+      }
+      baseDcID = false;
     });
   }
 
@@ -2598,6 +2607,11 @@ factory('MtpApiFileManager', function (MtpApiManager, $q, $window) {
       case 'inputAudioFileLocation':
         return 'audio' + location.id;
     }
+
+    if (!location.volume_id) {
+      console.trace('Empty location', location);
+    }
+
     return location.volume_id + '_' + location.local_id + '_' + location.secret + '.jpg';
   };
 
