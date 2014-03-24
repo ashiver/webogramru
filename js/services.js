@@ -1,5 +1,5 @@
 /*!
- * Webogram v0.0.19 - messaging web application for MTProto
+ * Webogram v0.0.21 - messaging web application for MTProto
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
@@ -273,15 +273,6 @@ angular.module('myApp.services', [])
   function wrapForFull (id) {
     var user = getUser(id);
 
-    user.thumb = {
-      placeholder: 'img/placeholders/UserAvatar'+((Math.abs(id) % 8) + 1)+'@2x.png',
-      location: user && user.photo && user.photo.photo_small,
-      width: 120,
-      height: 120,
-      size: 0
-    };
-    user.peerString = getUserString(id);
-
     return user;
   }
 
@@ -290,14 +281,66 @@ angular.module('myApp.services', [])
     scope.userID = userID;
 
     var modalInstance = $modal.open({
-      templateUrl: 'partials/user_modal.html?2',
+      templateUrl: 'partials/user_modal.html',
       controller: 'UserModalController',
       scope: scope,
       windowClass: 'user_modal_window'
     });
+  };
+  $rootScope.openUser = openUser;
+
+  function importContact (phone, firstName, lastName) {
+    return MtpApiManager.invokeApi('contacts.importContacts', {
+      contacts: [{
+        _: 'inputPhoneContact',
+        client_id: '1',
+        phone: phone,
+        first_name: firstName,
+        last_name: lastName
+      }],
+      replace: false
+    }).then(function (importedContactsResult) {
+      saveApiUsers(importedContactsResult.users);
+
+      var foundUserID = false;
+      angular.forEach(importedContactsResult.imported, function (importedContact) {
+        onContactUpdated(foundUserID = importedContact.user_id, true);
+      });
+
+      return foundUserID;
+    });
+  };
+
+  function deleteContacts (userIDs) {
+    var ids = []
+    angular.forEach(userIDs, function (userID) {
+      ids.push({_: 'inputUserContact', user_id: userID})
+    });
+    return MtpApiManager.invokeApi('contacts.deleteContacts', {
+      id: ids
+    }, function () {
+      angular.forEach(userIDs, function (userID) {
+        onContactUpdated(userID, false);
+      });
+    })
   }
 
-  $rootScope.openUser = openUser;
+  function onContactUpdated (userID, isContact) {
+    if (angular.isArray(contactsList)) {
+      var curPos = curIsContact = contactsList.indexOf(userID),
+          curIsContact = curPos != -1;
+
+      if (isContact != curIsContact) {
+        if (isContact) {
+          contactsList.push(userID);
+          SearchIndexManager.indexObject(userID, getUserSearchText(userID), contactsIndex);
+        } else {
+          contactsList.splice(curPos, 1);
+        }
+      }
+    }
+  }
+
 
   $rootScope.$on('apiUpdate', function (e, update) {
     // console.log('on apiUpdate', update);
@@ -326,21 +369,7 @@ angular.module('myApp.services', [])
         break;
 
       case 'updateContactLink':
-        if (angular.isArray(contactsList)) {
-          var userID = update.user_id,
-              curPos = curIsContact = contactsList.indexOf(userID),
-              curIsContact = curPos != -1,
-              newIsContact = update.my_link._ == 'contacts.myLinkContact';
-
-          if (newIsContact != curIsContact) {
-            if (newIsContact) {
-              contactsList.push(userID);
-              SearchIndexManager.indexObject(userID, getUserSearchText(userID), contactsIndex);
-            } else {
-              contactsList.splice(curPos, 1);
-            }
-          }
-        }
+        onContactUpdated(update.user_id, update.my_link._ == 'contacts.myLinkContact');
         break;
     }
   });
@@ -355,6 +384,8 @@ angular.module('myApp.services', [])
     getUserString: getUserString,
     getUserSearchText: getUserSearchText,
     hasUser: hasUser,
+    importContact: importContact,
+    deleteContacts: deleteContacts,
     wrapForFull: wrapForFull,
     openUser: openUser
   }
@@ -444,7 +475,7 @@ angular.module('myApp.services', [])
     scope.chatID = chatID;
 
     var modalInstance = $modal.open({
-      templateUrl: 'partials/chat_modal.html?4',
+      templateUrl: 'partials/chat_modal.html',
       controller: 'ChatModalController',
       windowClass: 'chat_modal_window',
       scope: scope
@@ -690,19 +721,18 @@ angular.module('myApp.services', [])
       }
     }
 
-    if (curDialogStorage.count !== null && (
-          curDialogStorage.dialogs.length >= offset + limit ||
-          curDialogStorage.dialogs.length == curDialogStorage.count
-        )) {
+    if (curDialogStorage.count !== null && curDialogStorage.dialogs.length == curDialogStorage.count ||
+        curDialogStorage.dialogs.length >= offset + (limit || 1)
+    ) {
       return $q.when({
         count: curDialogStorage.count,
-        dialogs: curDialogStorage.dialogs.slice(offset, offset + limit)
+        dialogs: curDialogStorage.dialogs.slice(offset, offset + (limit || 20))
       });
     }
 
-    var deferred = $q.defer();
+    limit = limit || 20;
 
-    MtpApiManager.invokeApi('messages.getDialogs', {
+    return MtpApiManager.invokeApi('messages.getDialogs', {
       offset: offset,
       limit: limit,
       max_id: maxID || 0
@@ -735,17 +765,17 @@ angular.module('myApp.services', [])
           top_message: dialog.top_message,
           unread_count: dialog.unread_count
         });
+
+        if (historiesStorage[peerID] === undefined) {
+          historiesStorage[peerID] = {count: null, history: [dialog.top_message], pending: []}
+        }
       });
 
-      deferred.resolve({
+      return {
         count: curDialogStorage.count,
         dialogs: curDialogStorage.dialogs.slice(offset, offset + limit)
-      });
-    }, function (error) {
-      deferred.reject(error);
+      };
     });
-
-    return deferred.promise;
   }
 
   function fillHistoryStorage (inputPeer, maxID, fullLimit, historyStorage) {
@@ -806,12 +836,9 @@ angular.module('myApp.services', [])
     if (!limit && !maxID) {
       var foundDialog = getDialogByPeerID(peerID);
       if (foundDialog && foundDialog[0] && foundDialog[0].unread_count > 1) {
-        unreadLimit = foundDialog[0].unread_count;
-        limit = Math.max(20, unreadLimit + 2);
+        unreadLimit = Math.min(1000, foundDialog[0].unread_count);
+        limit = unreadLimit;
       }
-    }
-    if (!limit) {
-      limit = 20;
     }
 
     if (maxID > 0) {
@@ -822,16 +849,21 @@ angular.module('myApp.services', [])
       }
     }
 
-    if (historyStorage.count !== null && (
-      historyStorage.history.length >= offset + limit ||
-      historyStorage.history.length == historyStorage.count
-    )) {
+    if (historyStorage.count !== null && historyStorage.history.length == historyStorage.count ||
+      historyStorage.history.length >= offset + (limit || 1)
+    ) {
       return $q.when({
         count: historyStorage.count,
-        history: resultPending.concat(historyStorage.history.slice(offset, offset + limit)),
+        history: resultPending.concat(historyStorage.history.slice(offset, offset + (limit || 20))),
         unreadLimit: unreadLimit
       });
     }
+
+    if (unreadLimit) {
+      limit = Math.max(20, unreadLimit + 2);
+    }
+
+    limit = limit || 20;
 
     return fillHistoryStorage(inputPeer, maxID, limit, historyStorage).then(function () {
       offset = 0;
@@ -858,7 +890,7 @@ angular.module('myApp.services', [])
       filter: inputFilter || {_: 'inputMessagesFilterEmpty'},
       min_date: 0,
       max_date: 0,
-      limit: limit,
+      limit: limit || 20,
       max_id: maxID || 0
     }).then(function (searchResult) {
       AppUsersManager.saveApiUsers(searchResult.users);
@@ -920,26 +952,25 @@ angular.module('myApp.services', [])
         historyStorage = historiesStorage[peerID],
         foundDialog = getDialogByPeerID(peerID);
 
-    if (!historyStorage ||
-        !historyStorage.history.length ||
-        foundDialog[0] && !foundDialog[0].unread_count) {
-      // console.log('bad1', historyStorage, foundDialog[0]);
-      return false;
-    }
+    if (!foundDialog[0] || !foundDialog[0].unread_count) {
 
-    var messageID,
-        message;
-    // console.log(historyStorage);
-    for (i = 0; i < historyStorage.history.length; i++) {
-      messageID = historyStorage.history[i];
-      message = messagesStorage[messageID];
-      // console.log('ms', message);
-      if (message && !message.out) {
-        if (message.unread) {
-          // console.log('unread');
+      if (!historyStorage || !historyStorage.history.length) {
+        return false;
+      }
+
+      var messageID,
+          message,
+          foundUnread = false;
+      for (i = historyStorage.history.length; i >= 0; i--) {
+        messageID = historyStorage.history[i];
+        message = messagesStorage[messageID];
+        // console.log('ms', message);
+        if (message && !message.out && message.unread) {
+          foundUnread = true;
           break;
         }
-        // console.log('bad2', message);
+      }
+      if (!foundUnread) {
         return false;
       }
     }
@@ -959,17 +990,19 @@ angular.module('myApp.services', [])
     });
 
 
-    var messageID, message, i, peerID, foundDialog, dialog;
-    for (i = 0; i < historyStorage.history.length; i++) {
-      messageID = historyStorage.history[i];
-      message = messagesStorage[messageID];
-      if (message && !message.out) {
-        message.unread = false;
-        if (messagesForHistory[messageID]) {
-          messagesForHistory[messageID].unread = false;
-        }
-        if (messagesForDialogs[messageID]) {
-          messagesForDialogs[messageID].unread = false;
+    if (historyStorage && historyStorage.history.length) {
+      var messageID, message, i, peerID, foundDialog, dialog;
+      for (i = 0; i < historyStorage.history.length; i++) {
+        messageID = historyStorage.history[i];
+        message = messagesStorage[messageID];
+        if (message && !message.out) {
+          message.unread = false;
+          if (messagesForHistory[messageID]) {
+            messagesForHistory[messageID].unread = false;
+          }
+          if (messagesForDialogs[messageID]) {
+            messagesForDialogs[messageID].unread = false;
+          }
         }
       }
     }
@@ -1116,7 +1149,7 @@ angular.module('myApp.services', [])
         randomIDS = bigint(randomID[0]).shiftLeft(32).add(bigint(randomID[1])).toString(),
         historyStorage = historiesStorage[peerID],
         inputPeer = AppPeersManager.getInputPeerByID(peerID),
-        attachType, fileName, fileName;
+        attachType, fileName;
 
     if (!options.isMedia) {
       attachType = 'document';
@@ -1254,9 +1287,95 @@ angular.module('myApp.services', [])
     pendingByRandomID[randomIDS] = [peerID, messageID];
   }
 
-  function forwardMessages (msgIDs, inputPeer) {
+  function sendOther(peerID, inputMedia) {
+    var messageID = tempID--,
+        randomID = [nextRandomInt(0xFFFFFFFF), nextRandomInt(0xFFFFFFFF)],
+        randomIDS = bigint(randomID[0]).shiftLeft(32).add(bigint(randomID[1])).toString(),
+        historyStorage = historiesStorage[peerID],
+        inputPeer = AppPeersManager.getInputPeerByID(peerID);
+
+    if (historyStorage === undefined) {
+      historyStorage = historiesStorage[peerID] = {count: null, history: [], pending: []};
+    }
+
+    MtpApiManager.getUserID().then(function (fromID) {
+      var media;
+      switch (inputMedia._) {
+        case 'inputMediaContact':
+          media = angular.extend({}, inputMedia, {_: 'messageMediaContact', user_id: 0});
+          break;
+      }
+
+      var message = {
+        _: 'message',
+        id: messageID,
+        from_id: fromID,
+        to_id: AppPeersManager.getOutputPeer(peerID),
+        out: true,
+        unread: true,
+        date: tsNow() / 1000,
+        message: '',
+        media: media,
+        random_id: randomIDS,
+        pending: true
+      };
+
+      var toggleError = function (on) {
+        var historyMessage = messagesForHistory[messageID];
+        if (on) {
+          message.error = true;
+          if (historyMessage) {
+            historyMessage.error = true;
+          }
+        } else {
+          delete message.error;
+          if (historyMessage) {
+            delete historyMessage.error;
+          }
+        }
+      }
+
+      message.send = function () {
+        MtpApiManager.invokeApi('messages.sendMedia', {
+          peer: inputPeer,
+          media: inputMedia,
+          random_id: randomID
+        }).then(function (result) {
+          if (ApiUpdatesManager.saveSeq(result.seq)) {
+            ApiUpdatesManager.saveUpdate({
+              _: 'updateMessageID',
+              random_id: randomIDS,
+              id: result.message.id
+            });
+
+            message.date = result.message.date;
+            message.id = result.message.id;
+            message.media = result.message.media;
+
+            ApiUpdatesManager.saveUpdate({
+              _: 'updateNewMessage',
+              message: message,
+              pts: result.pts
+            });
+          }
+        }, function (error) {
+          toggleError(true);
+        });
+      };
+
+      saveMessages([message]);
+      historyStorage.pending.unshift(messageID);
+      $rootScope.$broadcast('history_append', {peerID: peerID, messageID: messageID, my: true});
+
+      message.send();
+    });
+
+    pendingByRandomID[randomIDS] = [peerID, messageID];
+  }
+
+  function forwardMessages (peerID, msgIDs) {
     return MtpApiManager.invokeApi('messages.forwardMessages', {
-      peer: inputPeer,
+      peer: AppPeersManager.getInputPeerByID(peerID),
       id: msgIDs
     }).then(function (forwardResult) {
       AppUsersManager.saveApiUsers(forwardResult.users);
@@ -1409,6 +1528,9 @@ angular.module('myApp.services', [])
       if (message.action._ == 'messageActionChatEditPhoto') {
         message.action.photo = AppPhotosManager.wrapForHistory(message.action.photo.id);
       }
+      if (message.action._ == 'messageActionChatEditTitle') {
+        message.action.rTitle = RichTextProcessor.wrapRichText(message.action.title, {noLinks: true, noLinebreaks: true}) || 'DELETED';
+      }
 
       if (message.action.user_id) {
         message.action.user = AppUsersManager.getUser(message.action.user_id);
@@ -1491,7 +1613,7 @@ angular.module('myApp.services', [])
     notification.image = notificationPhoto.placeholder;
     notification.key = 'msg' + message.id;
 
-    if (notificationPhoto.location) {
+    if (notificationPhoto.location && !notificationPhoto.location.empty) {
       MtpApiFileManager.downloadSmallFile(notificationPhoto.location, notificationPhoto.size).then(function (url) {
         notification.image = url;
 
@@ -1683,6 +1805,7 @@ angular.module('myApp.services', [])
     saveMessages: saveMessages,
     sendText: sendText,
     sendFile: sendFile,
+    sendOther: sendOther,
     forwardMessages: forwardMessages,
     getMessagePeer: getMessagePeer,
     wrapForDialog: wrapForDialog,
@@ -1757,24 +1880,35 @@ angular.module('myApp.services', [])
 
   function wrapForFull (photoID) {
     var photo = wrapForHistory(photoID),
-        fullWidth = Math.min($(window).width() - 60, 542),
+        fullWidth = $(window).width() - 36,
         fullHeight = $($window).height() - 150,
         fullPhotoSize = choosePhotoSize(photo, fullWidth, fullHeight),
         full = {
-          placeholder: 'img/placeholders/PhotoThumbModal.gif',
-          width: fullWidth,
-          height: fullHeight
+          placeholder: 'img/placeholders/PhotoThumbModal.gif'
         };
 
+    if (fullWidth > 800) {
+      fullWidth -= 200;
+    }
+
+    full.width = fullWidth;
+    full.height = fullHeight;
+
     if (fullPhotoSize && fullPhotoSize._ != 'photoSizeEmpty') {
-      if (fullPhotoSize.w > fullPhotoSize.h) {
+      if ((fullPhotoSize.w / fullPhotoSize.h) > (fullWidth / fullHeight)) {
         full.height = parseInt(fullPhotoSize.h * fullWidth / fullPhotoSize.w);
-      } else {
+      }
+      else {
         full.width = parseInt(fullPhotoSize.w * fullHeight / fullPhotoSize.h);
         if (full.width > fullWidth) {
           full.height = parseInt(full.height * fullWidth / full.width);
           full.width = fullWidth;
         }
+      }
+
+      if (full.width >= fullPhotoSize.w && full.height >= fullPhotoSize.h) {
+        full.width = fullPhotoSize.w;
+        full.height = fullPhotoSize.h;
       }
 
       full.location = fullPhotoSize.location;
@@ -1792,9 +1926,10 @@ angular.module('myApp.services', [])
     scope.photoID = photoID;
 
     var modalInstance = $modal.open({
-      templateUrl: 'partials/photo_modal.html?1',
+      templateUrl: 'partials/photo_modal.html',
       controller: 'PhotoModalController',
-      scope: scope
+      scope: scope,
+      windowClass: 'photo_modal_window'
     });
   }
 
@@ -1810,8 +1945,9 @@ angular.module('myApp.services', [])
 })
 
 
-.service('AppVideoManager', function ($rootScope, $modal, $window, MtpApiFileManager, AppUsersManager) {
+.service('AppVideoManager', function ($rootScope, $modal, $window, $timeout, MtpApiFileManager, AppUsersManager) {
   var videos = {};
+  var videosForHistory = {};
 
   function saveVideo (apiVideo) {
     videos[apiVideo.id] = apiVideo;
@@ -1827,6 +1963,10 @@ angular.module('myApp.services', [])
   };
 
   function wrapForHistory (videoID) {
+    if (videosForHistory[videoID] !== undefined) {
+      return videosForHistory[videoID];
+    }
+
     var video = angular.copy(videos[videoID]),
         width = 200,
         height = 200,
@@ -1850,7 +1990,7 @@ angular.module('myApp.services', [])
 
     video.thumb = thumb;
 
-    return video;
+    return videosForHistory[videoID] = video;
   }
 
   function wrapForFull (videoID) {
@@ -1892,13 +2032,82 @@ angular.module('myApp.services', [])
     scope.player = {};
 
     var modalInstance = $modal.open({
-      templateUrl: 'partials/video_modal.html?1',
+      templateUrl: 'partials/video_modal.html',
       controller: 'VideoModalController',
       scope: scope
     });
   }
 
+  function downloadVideo (videoID, accessHash, popup) {
+    var video = videos[videoID],
+        historyVideo = videosForHistory[videoID] || video || {},
+        inputFileLocation = {
+          _: 'inputVideoFileLocation',
+          id: videoID,
+          access_hash: accessHash || video.access_hash
+        };
+
+    historyVideo.progress = {enabled: true, percent: 1, total: video.size};
+
+    function updateDownloadProgress (progress) {
+      console.log('dl progress', progress);
+      historyVideo.progress.done = progress.done;
+      historyVideo.progress.percent = Math.max(1, Math.floor(100 * progress.done / progress.total));
+      $rootScope.$broadcast('history_update');
+    }
+
+    var ext = 'mp4',
+        mimeType = 'video/mpeg4',
+        fileName = 'video' + videoID + '.' + ext;
+
+    if (window.chrome && chrome.fileSystem && chrome.fileSystem.chooseEntry) {
+
+      chrome.fileSystem.chooseEntry({
+        type: 'saveFile',
+        suggestedName: fileName,
+        accepts: [{
+          mimeTypes: [mimeType],
+          extensions: [ext]
+        }]
+      }, function (writableFileEntry) {
+        MtpApiFileManager.downloadFile(video.dc_id, inputFileLocation, video.size, writableFileEntry, {mime: mimeType}).then(function (url) {
+          delete historyVideo.progress;
+          console.log('file save done');
+        }, function (e) {
+          console.log('video download failed', e);
+          historyVideo.progress.enabled = false;
+        }, updateDownloadProgress);
+      });
+    } else {
+      MtpApiFileManager.downloadFile(video.dc_id, inputFileLocation, video.size, null, {mime: mimeType}).then(function (url) {
+        delete historyVideo.progress;
+
+        if (popup) {
+          window.open(url, '_blank');
+          return
+        }
+
+        var a = $('<a>Download</a>')
+                  .css({position: 'absolute', top: 1, left: 1})
+                  .attr('href', url)
+                  .attr('target', '_blank')
+                  .attr('download', fileName)
+                  .appendTo('body');
+
+        a[0].dataset.downloadurl = [mimeType, fileName, url].join(':');
+        a[0].click();
+        $timeout(function () {
+          a.remove();
+        }, 100);
+      }, function (e) {
+        console.log('video download failed', e);
+        historyVideo.progress.enabled = false;
+      }, updateDownloadProgress);
+    }
+  };
+
   $rootScope.openVideo = openVideo;
+  $rootScope.downloadVideo = downloadVideo;
 
   return {
     saveVideo: saveVideo,
@@ -1960,7 +2169,7 @@ angular.module('myApp.services', [])
     return docsForHistory[docID] = doc;
   }
 
-  function openDoc (docID, accessHash, popup) {
+  function downloadDoc (docID, accessHash, popup) {
     var doc = docs[docID],
         historyDoc = docsForHistory[docID] || doc || {},
         inputFileLocation = {
@@ -2007,8 +2216,14 @@ angular.module('myApp.services', [])
           return
         }
 
-        var a = $('<a>Download</a>').css({position: 'absolute', top: 1, left: 1}).attr('href', url).attr('target', '_blank').attr('download', doc.file_name).appendTo('body');
-        a[0].dataset.downloadurl = ['png', doc.file_name, url].join(':');
+        var a = $('<a>Download</a>')
+                  .css({position: 'absolute', top: 1, left: 1})
+                  .attr('href', url)
+                  .attr('target', '_blank')
+                  .attr('download', doc.file_name)
+                  .appendTo('body');
+
+        a[0].dataset.downloadurl = [doc.mime_type, doc.file_name, url].join(':');
         a[0].click();
         $timeout(function () {
           a.remove();
@@ -2020,12 +2235,12 @@ angular.module('myApp.services', [])
     }
   }
 
-  $rootScope.openDoc = openDoc;
+  $rootScope.downloadDoc = downloadDoc;
 
   return {
     saveDoc: saveDoc,
     wrapForHistory: wrapForHistory,
-    openDoc: openDoc
+    downloadDoc: downloadDoc
   }
 })
 
@@ -2097,18 +2312,10 @@ angular.module('myApp.services', [])
       return urlPromises[url];
     }
 
-    var deferred = $q.defer();
-
-    $http.get(url, {responseType: 'blob', transformRequest: null})
-      .then(
-        function (response) {
-          deferred.resolve(window.webkitURL.createObjectURL(response.data));
-        }, function (error) {
-          deferred.reject(error);
-        }
-      );
-
-    return urlPromises[url] = deferred.promise;
+    return urlPromises[url] = $http.get(url, {responseType: 'blob', transformRequest: null})
+      .then(function (response) {
+        return window.webkitURL.createObjectURL(response.data);
+      });
   }
 
   return {
@@ -2338,6 +2545,7 @@ angular.module('myApp.services', [])
   }
 
   var regExp = new RegExp('((?:(ftp|https?)://|(?:mailto:)?([A-Za-z0-9._%+-]+@))(\\S*\\.\\S*[^\\s.;,(){}<>"\']))|(\\n)|(' + emojiUtf.join('|') + ')', 'i');
+  var youtubeRegex = /(?:https?:\/\/)?(?:www\.)?youtu(?:|.be|be.com|.b)(?:\/v\/|\/watch\\?v=|e\/|\/watch(?:.+)v=)(.{11})(?:\&[^\s]*)?/;
 
   return {
     wrapRichText: wrapRichText
@@ -2364,6 +2572,7 @@ angular.module('myApp.services', [])
         return { category: cat, row: row, column: column };
       }
     }
+    console.error('emoji not found in spritesheet', emojiCode);
     return null;
   }
 
@@ -2420,10 +2629,11 @@ angular.module('myApp.services', [])
       }
       else if (match[6]) {
 
-        if (emojiCode = emojiMap[match[6]]) {
-          emojiFound = true;
+        if ((emojiCode = emojiMap[match[6]]) &&
+            (emojiCoords = getEmojiSpritesheetCoords(emojiCode))) {
+
           emojiTitle = encodeEntities(emojiData[emojiCode][1][0]);
-          emojiCoords = getEmojiSpritesheetCoords(emojiCode);
+          emojiFound = true;
           html.push(
             '<span class="emoji emoji-',
             emojiCoords.category,
@@ -2454,6 +2664,16 @@ angular.module('myApp.services', [])
     }
 
     // console.log(4, text, html);
+    if (!options.noLinks) {
+      var youtubeMatches = text.match(youtubeRegex),
+          videoID = youtubeMatches && youtubeMatches[1];
+
+      if (videoID) {
+        text = text + '<div class="im_message_iframe_video"><iframe type="text/html" frameborder="0" ' +
+              'src="http://www.youtube.com/embed/' + videoID +
+              '?autoplay=0&amp;controls=2"></iframe></div>'
+      }
+    }
 
     return $sce.trustAs('html', text);
   }

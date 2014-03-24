@@ -1,5 +1,5 @@
 /*!
- * Webogram v0.0.19 - messaging web application for MTProto
+ * Webogram v0.0.21 - messaging web application for MTProto
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
@@ -168,7 +168,7 @@ angular.module('myApp.controllers', [])
     $scope.isLoggedIn = true;
     $scope.openSettings = function () {
       $modal.open({
-        templateUrl: 'partials/settings_modal.html?3',
+        templateUrl: 'partials/settings_modal.html',
         controller: 'SettingsModalController',
         scope: $rootScope.$new(),
         windowClass: 'settings_modal_window'
@@ -191,7 +191,7 @@ angular.module('myApp.controllers', [])
           scope.userIDs = userIDs;
 
           $modal.open({
-            templateUrl: 'partials/chat_create_modal.html?3',
+            templateUrl: 'partials/chat_create_modal.html',
             controller: 'ChatCreateModalController',
             scope: scope,
             windowClass: 'contacts_modal_window'
@@ -219,13 +219,14 @@ angular.module('myApp.controllers', [])
     // console.log('init controller');
 
     $scope.dialogs = [];
+    $scope.contacts = [];
     $scope.search = {};
 
     var offset = 0,
         maxID = 0,
         hasMore = false,
-        startLimit = 20,
-        limit = 100;
+        peersInDialogs = {},
+        contactsShown;
 
     MtpApiManager.invokeApi('account.updateStatus', {offline: false});
     $scope.$on('dialogs_need_more', function () {
@@ -277,17 +278,24 @@ angular.module('myApp.controllers', [])
       offset = 0;
       maxID = 0;
       hasMore = false;
+      peersInDialogs = {};
+      contactsShown = false;
 
-      AppMessagesManager.getDialogs($scope.search.query, maxID, startLimit).then(function (dialogsResult) {
+      AppMessagesManager.getDialogs($scope.search.query, maxID).then(function (dialogsResult) {
         $scope.dialogs = [];
 
+        if (!$scope.search.query) {
+          $scope.contacts = [];
+        }
+
         if (dialogsResult.dialogs.length) {
-          offset += startLimit;
+          offset += dialogsResult.dialogs.length;
 
           maxID = dialogsResult.dialogs[dialogsResult.dialogs.length - 1].top_message;
-          hasMore = offset < dialogsResult.count;
+          hasMore = dialogsResult.count === null || offset < dialogsResult.count;
 
           angular.forEach(dialogsResult.dialogs, function (dialog) {
+            peersInDialogs[dialog.peerID] = true;
             $scope.dialogs.push(AppMessagesManager.wrapForDialog(dialog.top_message, dialog.unread_count));
           });
         }
@@ -295,7 +303,7 @@ angular.module('myApp.controllers', [])
         $scope.$broadcast('ui_dialogs_change');
 
         if (!$scope.search.query) {
-          AppMessagesManager.getDialogs('', maxID, limit);
+          AppMessagesManager.getDialogs('', maxID, 100);
         }
 
       }, function (error) {
@@ -308,16 +316,37 @@ angular.module('myApp.controllers', [])
     }
 
     function showMoreDialogs () {
-      if (!hasMore || !offset) {
+      if (contactsShown && (!hasMore || !offset)) {
         return;
       }
 
-      AppMessagesManager.getDialogs($scope.search.query, maxID, limit).then(function (dialogsResult) {
-        offset += limit;
+      if (!hasMore) {
+        contactsShown = true;
+
+        AppUsersManager.getContacts($scope.search.query).then(function (contactsList) {
+          $scope.contacts = [];
+          angular.forEach(contactsList, function(userID) {
+            if (peersInDialogs[userID] === undefined) {
+              $scope.contacts.push({
+                userID: userID,
+                user: AppUsersManager.getUser(userID),
+                userPhoto: AppUsersManager.getUserPhoto(userID, 'User'),
+                peerString: AppUsersManager.getUserString(userID)
+              });
+            }
+          });
+        });
+        $scope.$broadcast('ui_dialogs_append');
+        return;
+      }
+
+      AppMessagesManager.getDialogs($scope.search.query, maxID).then(function (dialogsResult) {
+        offset += dialogsResult.dialogs.length;
         maxID = dialogsResult.dialogs[dialogsResult.dialogs.length - 1].top_message;
-        hasMore = offset < dialogsResult.count;
+        hasMore = dialogsResult.count === null || offset < dialogsResult.count;
 
         angular.forEach(dialogsResult.dialogs, function (dialog) {
+          peersInDialogs[dialog.peerID] = true;
           $scope.dialogs.push(AppMessagesManager.wrapForDialog(dialog.top_message, dialog.unread_count));
         });
 
@@ -337,6 +366,7 @@ angular.module('myApp.controllers', [])
     StatusManager.start();
 
     $scope.history = [];
+    $scope.historyEmpty = false;
     $scope.mediaType = false;
     $scope.selectedMsgs = {};
     $scope.selectedCount = 0;
@@ -358,8 +388,6 @@ angular.module('myApp.controllers', [])
         offset = 0,
         hasMore = false,
         maxID = 0,
-        startLimit = 20,
-        limit = 50,
         inputMediaFilters = {
           photos: 'inputMessagesFilterPhotos',
           video: 'inputMessagesFilterVideo',
@@ -416,16 +444,16 @@ angular.module('myApp.controllers', [])
       if (!hasMore || !offset) {
         return;
       }
-      console.trace('load history');
+      // console.trace('load history');
 
       var inputMediaFilter = $scope.mediaType && {_: inputMediaFilters[$scope.mediaType]},
           getMessagesPromise = inputMediaFilter
-        ? AppMessagesManager.getSearch($scope.curDialog.inputPeer, '', inputMediaFilter, maxID, limit)
-        : AppMessagesManager.getHistory($scope.curDialog.inputPeer, maxID, limit);
+        ? AppMessagesManager.getSearch($scope.curDialog.inputPeer, '', inputMediaFilter, maxID)
+        : AppMessagesManager.getHistory($scope.curDialog.inputPeer, maxID);
 
       getMessagesPromise.then(function (historyResult) {
-        offset += limit;
-        hasMore = offset < historyResult.count;
+        offset += historyResult.history.length;
+        hasMore = historyResult.count === null || offset < historyResult.count;
         maxID = historyResult.history[historyResult.history.length - 1];
 
         angular.forEach(historyResult.history, function (id) {
@@ -446,14 +474,18 @@ angular.module('myApp.controllers', [])
       var curJump = ++jump,
           inputMediaFilter = $scope.mediaType && {_: inputMediaFilters[$scope.mediaType]},
           getMessagesPromise = inputMediaFilter
-        ? AppMessagesManager.getSearch($scope.curDialog.inputPeer, '', inputMediaFilter, maxID, startLimit)
+        ? AppMessagesManager.getSearch($scope.curDialog.inputPeer, '', inputMediaFilter, maxID)
         : AppMessagesManager.getHistory($scope.curDialog.inputPeer, maxID);
+
+      $scope.historyEmpty = false;
 
       getMessagesPromise.then(function (historyResult) {
         if (curJump != jump) return;
 
         offset += historyResult.history.length;
-        hasMore = offset < historyResult.count;
+        $scope.historyEmpty = !historyResult.count;
+
+        hasMore = historyResult.count === null || offset < historyResult.count;
         maxID = historyResult.history[historyResult.history.length - 1];
 
         updateHistoryPeer();
@@ -547,9 +579,10 @@ angular.module('myApp.controllers', [])
         });
 
         PeersSelectService.selectPeer().then(function (peerString) {
-          var inputPeer = AppPeersManager.getInputPeer(peerString);
-          AppMessagesManager.forwardMessages(selectedMessageIDs, inputPeer).then(function () {
+          var peerID = AppPeersManager.getPeerID(peerString);
+          AppMessagesManager.forwardMessages(peerID, selectedMessageIDs).then(function () {
             selectedCancel();
+            $rootScope.$broadcast('history_focus', {peerString: peerString});
           });
         });
 
@@ -590,7 +623,11 @@ angular.module('myApp.controllers', [])
     $scope.$on('history_append', function (e, addedMessage) {
       if (addedMessage.peerID == $scope.curDialog.peerID) {
         if ($scope.mediaType) {
-          $scope.missedCount++;
+          if (addedMessage.my) {
+            toggleMedia();
+          } else {
+            $scope.missedCount++;
+          }
           return;
         }
         // console.log('append', addedMessage);
@@ -629,6 +666,12 @@ angular.module('myApp.controllers', [])
     $scope.$on('dialog_flush', function (e, dialog) {
       if (dialog.peerID == $scope.curDialog.peerID) {
         $scope.history = [];
+      }
+    });
+
+    $scope.$on('history_focus', function (e, peerData) {
+      if ($scope.mediaType) {
+        toggleMedia();
       }
     });
 
@@ -696,7 +739,7 @@ angular.module('myApp.controllers', [])
       $timeout(function () {
         var text = $scope.draftMessage.text;
 
-        if (!text.length) {
+        if (!angular.isString(text) || !text.length) {
           return false;
         }
 
@@ -771,7 +814,6 @@ angular.module('myApp.controllers', [])
         $scope.$broadcast('ui_message_send');
       }
     }
-
   })
 
   .controller('PhotoModalController', function ($scope, AppPhotosManager) {
@@ -782,8 +824,12 @@ angular.module('myApp.controllers', [])
     $scope.video = AppVideoManager.wrapForFull($scope.videoID);
   })
 
-  .controller('UserModalController', function ($scope, $location, $rootScope, $modalStack, AppUsersManager, NotificationsManager, AppMessagesManager, AppPeersManager) {
-    $scope.user = AppUsersManager.wrapForFull($scope.userID);
+  .controller('UserModalController', function ($scope, $location, $rootScope, $modal, AppUsersManager, NotificationsManager, AppMessagesManager, AppPeersManager, PeersSelectService) {
+
+    var peerString = AppUsersManager.getUserString($scope.userID);
+
+    $scope.user = AppUsersManager.getUser($scope.userID);
+    $scope.userPhoto = AppUsersManager.getUserPhoto($scope.userID, 'User');
 
     $scope.settings = {notifications: true};
 
@@ -807,7 +853,7 @@ angular.module('myApp.controllers', [])
 
 
     $scope.goToHistory = function () {
-      $rootScope.$broadcast('history_focus', {peerString: $scope.user.peerString});
+      $rootScope.$broadcast('history_focus', {peerString: peerString});
     };
 
     $scope.flushHistory = function () {
@@ -818,9 +864,52 @@ angular.module('myApp.controllers', [])
         $scope.goToHistory();
       });
     };
+
+    $scope.importContact = function (edit) {
+      var scope = $rootScope.$new();
+      scope.importContact = {
+        phone: $scope.user.phone,
+        first_name: $scope.user.first_name,
+        last_name: $scope.user.last_name,
+      };
+
+      $modal.open({
+        templateUrl: edit ? 'partials/edit_contact_modal.html' : 'partials/import_contact_modal.html',
+        controller: 'ImportContactModalController',
+        windowClass: 'import_contact_modal_window',
+        scope: scope
+      }).result.then(function (foundUserID) {
+        if ($scope.userID == foundUserID) {
+          $scope.user = AppUsersManager.getUser($scope.userID);
+          console.log($scope.user);
+        }
+      });
+    };
+
+    $scope.deleteContact = function () {
+      AppUsersManager.deleteContacts([$scope.userID]).then(function () {
+        $scope.user = AppUsersManager.getUser($scope.userID);
+        console.log($scope.user);
+      });
+    };
+
+    $scope.shareContact = function () {
+      PeersSelectService.selectPeer().then(function (peerString) {
+        var peerID = AppPeersManager.getPeerID(peerString);
+
+        AppMessagesManager.sendOther(peerID, {
+          _: 'inputMediaContact',
+          phone_number: $scope.user.phone,
+          first_name: $scope.user.first_name,
+          last_name: $scope.user.last_name
+        });
+        $rootScope.$broadcast('history_focus', {peerString: peerString});
+      })
+    }
+
   })
 
-  .controller('ChatModalController', function ($scope, $timeout, $rootScope, $modal, AppUsersManager, AppChatsManager, MtpApiManager, MtpApiFileManager, NotificationsManager, AppMessagesManager, AppPeersManager, ApiUpdatesManager, ContactsSelectService) {
+  .controller('ChatModalController', function ($scope, $timeout, $rootScope, $modal, AppUsersManager, AppChatsManager, MtpApiManager, MtpApiFileManager, NotificationsManager, AppMessagesManager, AppPeersManager, ApiUpdatesManager, ContactsSelectService, ErrorService) {
 
     $scope.chatFull = AppChatsManager.wrapForFull($scope.chatID, {});
 
@@ -831,6 +920,7 @@ angular.module('myApp.controllers', [])
       AppUsersManager.saveApiUsers(result.users);
 
       $scope.chatFull = AppChatsManager.wrapForFull($scope.chatID, result.full_chat);
+      $scope.$broadcast('ui_height');
     });
 
     $scope.settings = {notifications: true};
@@ -943,12 +1033,12 @@ angular.module('myApp.controllers', [])
     $scope.$watch('photo.file', onPhotoSelected);
 
     function onPhotoSelected (photo) {
-      if (!photo || !photo.hasOwnProperty('name')) {
+      if (!photo || !photo.type || photo.type.indexOf('image') !== 0) {
         return;
       }
       $scope.photo.updating = true;
       MtpApiFileManager.uploadFile(photo).then(function (inputFile) {
-        MtpApiManager.invokeApi('messages.editChatPhoto', {
+        return MtpApiManager.invokeApi('messages.editChatPhoto', {
           chat_id: $scope.chatID,
           photo: {
             _: 'inputChatUploadedPhoto',
@@ -957,8 +1047,15 @@ angular.module('myApp.controllers', [])
           }
         }).then(function (updateResult) {
           onStatedMessage(updateResult);
-          $scope.photo.updating = false;
+        }, function (error) {
+          switch (error.code) {
+            case 400:
+              ErrorService.showSimpleError('Bad photo', 'The photo is invalid, please select another file.');
+              break;
+          }
         });
+      })['finally'](function () {
+        $scope.photo.updating = false;
       });
     };
 
@@ -969,6 +1066,7 @@ angular.module('myApp.controllers', [])
         photo: {_: 'inputChatPhotoEmpty'}
       }).then(function (updateResult) {
         onStatedMessage(updateResult);
+      })['finally'](function () {
         $scope.photo.updating = false;
       });
     };
@@ -978,7 +1076,7 @@ angular.module('myApp.controllers', [])
       scope.chatID = $scope.chatID;
 
       $modal.open({
-        templateUrl: 'partials/chat_edit_modal.html?3',
+        templateUrl: 'partials/chat_edit_modal.html',
         controller: 'ChatEditModalController',
         scope: scope,
         windowClass: 'contacts_modal_window'
@@ -987,7 +1085,7 @@ angular.module('myApp.controllers', [])
 
   })
 
-  .controller('SettingsModalController', function ($rootScope, $scope, $timeout, AppUsersManager, AppChatsManager, MtpApiManager, AppConfigManager, NotificationsManager, MtpApiFileManager, ApiUpdatesManager) {
+  .controller('SettingsModalController', function ($rootScope, $scope, $timeout, AppUsersManager, AppChatsManager, MtpApiManager, AppConfigManager, NotificationsManager, MtpApiFileManager, ApiUpdatesManager, ErrorService) {
 
     $scope.profile = {};
 
@@ -1008,7 +1106,7 @@ angular.module('myApp.controllers', [])
     $scope.$watch('photo.file', onPhotoSelected);
 
     function onPhotoSelected (photo) {
-      if (!photo || !photo.hasOwnProperty('name')) {
+      if (!photo || !photo.type || photo.type.indexOf('image') !== 0) {
         return;
       }
       $scope.photo.updating = true;
@@ -1030,8 +1128,15 @@ angular.module('myApp.controllers', [])
             });
             $scope.profile.photo = AppUsersManager.getUserPhoto(id, 'User');
           });
-          $scope.photo.updating = false;
+        }, function (error) {
+          switch (error.code) {
+            case 400:
+              ErrorService.showSimpleError('Bad photo', 'The photo is invalid, please select another file.');
+              break;
+          }
         });
+      })['finally'](function () {
+        $scope.photo.updating = false;
       });
     };
 
@@ -1051,6 +1156,7 @@ angular.module('myApp.controllers', [])
           });
           $scope.profile.photo = AppUsersManager.getUserPhoto(id, 'User');
         });
+      })['finally'](function () {
         $scope.photo.updating = false;
       });
     };
@@ -1132,7 +1238,7 @@ angular.module('myApp.controllers', [])
     }
   })
 
-  .controller('ContactsModalController', function ($scope, $modalInstance, AppUsersManager) {
+  .controller('ContactsModalController', function ($scope, $modal, $modalInstance, AppUsersManager) {
     $scope.contacts = [];
     $scope.search = {};
 
@@ -1155,8 +1261,8 @@ angular.module('myApp.controllers', [])
       }
     }
 
-    $scope.$watch('search.query', function (newValue) {
-      AppUsersManager.getContacts(newValue).then(function (contactsList) {
+    function updateContacts (query) {
+      AppUsersManager.getContacts(query).then(function (contactsList) {
         $scope.contacts = [];
         angular.forEach(contactsList, function(userID) {
           var contact = {
@@ -1168,7 +1274,9 @@ angular.module('myApp.controllers', [])
         });
         $scope.$broadcast('contacts_change');
       });
-    });
+    };
+
+    $scope.$watch('search.query', updateContacts);
 
     $scope.contactSelect = function (userID) {
       if ($scope.disabledContacts[userID]) {
@@ -1195,6 +1303,18 @@ angular.module('myApp.controllers', [])
         return $modalInstance.close(selectedUserIDs);
       }
     }
+
+    $scope.importContact = function () {
+      $modal.open({
+        templateUrl: 'partials/import_contact_modal.html',
+        controller: 'ImportContactModalController',
+        windowClass: 'import_contact_modal_window'
+      }).result.then(function (foundUserID) {
+        if (foundUserID) {
+          updateContacts($scope.search && $scope.search.query || '');
+        }
+      });
+    };
 
   })
 
@@ -1275,4 +1395,26 @@ angular.module('myApp.controllers', [])
         $rootScope.$broadcast('history_focus', {peerString: peerString});
       });
     };
+  })
+
+  .controller('ImportContactModalController', function ($scope, $modalInstance, $rootScope, AppUsersManager) {
+    if ($scope.importContact === undefined) {
+      $scope.importContact = {};
+    }
+
+    $scope.doImport = function () {
+      if ($scope.importContact && $scope.importContact.phone) {
+        $scope.progress = {enabled: true};
+        AppUsersManager.importContact(
+          $scope.importContact.phone,
+          $scope.importContact.first_name,
+          $scope.importContact.last_name
+        ).then(function (foundUserID) {
+          $modalInstance.close(foundUserID);
+        })['finally'](function () {
+          delete $scope.progress.enabled;
+        });
+      }
+    };
+
   })

@@ -1,5 +1,5 @@
 /*!
- * Webogram v0.0.19 - messaging web application for MTProto
+ * Webogram v0.0.21 - messaging web application for MTProto
  * https://github.com/zhukov/webogram
  * Copyright (C) 2014 Igor Zhukov <igor.beatle@gmail.com>
  * https://github.com/zhukov/webogram/blob/master/LICENSE
@@ -1071,6 +1071,10 @@ factory('MtpAuthorizer', function (MtpDcConfigurator, MtpRsaKeysManager, MtpSecu
     delete $http.defaults.headers.post['Content-Type'];
     delete $http.defaults.headers.common['Accept'];
 
+    if (!('ArrayBufferView' in window)) {
+      resultArray = resultArray.buffer;
+    }
+
     return $http.post('http://' + MtpDcConfigurator.chooseServer(dcID) + '/apiw1', resultArray, {
       responseType: 'arraybuffer',
       transformRequest: null,
@@ -1122,7 +1126,7 @@ factory('MtpAuthorizer', function (MtpDcConfigurator, MtpRsaKeysManager, MtpSecu
 
       console.log('PQ factorization start');
       if (!!window.Worker) {
-        var worker = new Worker('js/lib/pq_worker.js?1');
+        var worker = new Worker('js/lib/pq_worker.js');
 
         worker.onmessage = function (e) {
           auth.p = e.data[0];
@@ -1416,7 +1420,7 @@ factory('MtpAesService', function ($q) {
     };
   }
 
-  var worker = new Worker('js/lib/aes_worker.js?2'),
+  var worker = new Worker('js/lib/aes_worker.js'),
       taskID = 0,
       awaiting = {};
 
@@ -1468,7 +1472,7 @@ factory('MtpSha1Service', function ($q) {
     };
   }
 
-  var worker = new Worker('js/lib/sha1_worker.js?2'),
+  var worker = new Worker('js/lib/sha1_worker.js'),
       taskID = 0,
       awaiting = {};
 
@@ -1645,7 +1649,7 @@ factory('MtpNetworkerFactory', function (MtpDcConfigurator, MtpMessageIdGenerato
     var serializer = new TLSerialization(options);
 
     if (!this.connectionInited) {
-      serializer.storeInt(962726977, 'InokeWithLayer10');
+      serializer.storeInt(0xdda60d3c, 'invokeWithLayer12');
       serializer.storeInt(0x69796de9, 'initConnection');
       serializer.storeInt(2496, 'api_id');
       serializer.storeString(navigator.userAgent || 'Unknown UserAgent', 'device_model');
@@ -2028,7 +2032,12 @@ factory('MtpNetworkerFactory', function (MtpDcConfigurator, MtpMessageIdGenerato
       delete $http.defaults.headers.post['Content-Type'];
       delete $http.defaults.headers.common['Accept'];
 
-      return $http.post('http://' + MtpDcConfigurator.chooseServer(self.dcID) + '/apiw1', request.getArray(), {
+      var resultArray = request.getArray();
+      if (!('ArrayBufferView' in window)) {
+        resultArray = resultArray.buffer;
+      }
+
+      return $http.post('http://' + MtpDcConfigurator.chooseServer(self.dcID) + '/apiw1', resultArray, {
         responseType: 'arraybuffer',
         transformRequest: null
       });
